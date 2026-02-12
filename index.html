@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>StockPulse</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- Pretendard Font -->
+    <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        
+        body {
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+            background-color: #F7F9FC;
+            -webkit-tap-highlight-color: transparent;
+            letter-spacing: -0.015em;
+        }
+
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-up {
+            animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+    </style>
+</head>
+<body class="text-gray-900 h-screen flex flex-col overflow-hidden">
+
+    <div class="w-full h-full relative flex flex-col overflow-hidden">
+        
+        <!-- Header -->
+        <header class="px-6 pt-8 pb-4 bg-white/80 backdrop-blur-md border-b border-gray-100 z-30 flex-shrink-0">
+            <div class="max-w-3xl mx-auto w-full flex justify-between items-start">
+                <div>
+                    <p id="last-update-time" class="text-[10px] font-bold text-blue-600 uppercase tracking-widest mb-1 opacity-80">
+                        CONNECTING...
+                    </p>
+                    <h1 class="text-[26px] font-extrabold tracking-tight leading-none flex items-center gap-1.5 text-gray-900">
+                        StockPulse 
+                        <!-- 하트 모양을 빼고 맥박 파동(Activity) 선만 남긴 아이콘 -->
+                        <i class="ph-bold ph-activity text-rose-500 animate-pulse text-[28px] mt-0.5 drop-shadow-[0_0_8px_rgba(244,63,94,0.4)]"></i>
+                    </h1>
+                </div>
+                <button onclick="window.showInfo()" class="w-10 h-10 rounded-full bg-gray-50 border border-gray-200/50 flex items-center justify-center text-gray-500 hover:bg-white transition-all shadow-sm">
+                    <i class="ph-bold ph-info text-lg"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Segmented Control Tabs -->
+        <div class="px-6 py-4 z-20 bg-[#F7F9FC]/90 backdrop-blur-md flex-shrink-0">
+            <div id="category-tabs" class="max-w-3xl mx-auto bg-gray-200/60 backdrop-blur-md p-1 rounded-[20px] flex gap-1 relative">
+                <div id="tab-indicator" class="absolute top-1 bottom-1 left-1 bg-white rounded-[16px] shadow-sm transition-all duration-300 ease-out w-[calc(33.33%-4px)]"></div>
+                
+                <button onclick="window.switchTab('domestic', 0)" id="tab-domestic" class="relative z-10 flex-1 py-2.5 text-[13px] font-bold text-gray-900 transition-colors flex items-center justify-center gap-1.5">
+                    <i class="ph-fill ph-trend-up"></i> 국내
+                </button>
+                <button onclick="window.switchTab('overseas', 1)" id="tab-overseas" class="relative z-10 flex-1 py-2.5 text-[13px] font-bold text-gray-500 transition-colors flex items-center justify-center gap-1.5">
+                    <i class="ph-fill ph-globe-hemisphere-west"></i> 해외
+                </button>
+                <button onclick="window.switchTab('crypto', 2)" id="tab-crypto" class="relative z-10 flex-1 py-2.5 text-[13px] font-bold text-gray-500 transition-colors flex items-center justify-center gap-1.5">
+                    <i class="ph-fill ph-currency-btc"></i> 코인
+                </button>
+            </div>
+        </div>
+
+        <!-- Toast Notification -->
+        <div id="toast" class="pointer-events-none fixed top-10 left-1/2 transform -translate-x-1/2 px-5 py-3 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] z-[60] text-[13px] font-bold transition-all duration-400 opacity-0 translate-y-[-20px] whitespace-nowrap bg-gray-900/95 backdrop-blur text-white flex items-center gap-2.5">
+            <i class="ph-fill ph-bell-ringing text-blue-400 text-lg"></i> <span id="toast-msg">메시지</span>
+        </div>
+
+        <!-- Main Content (Feed Only) -->
+        <main class="flex-1 overflow-y-auto px-5 py-2 no-scrollbar pb-10 relative scroll-smooth w-full">
+            <div id="loading-overlay" class="absolute inset-0 z-10 flex flex-col items-center justify-center h-[50vh]">
+                <div class="relative w-12 h-12">
+                    <div class="absolute inset-0 border-[3px] border-blue-100 rounded-full"></div>
+                    <div class="absolute inset-0 border-[3px] border-blue-600 rounded-full border-t-transparent animate-spin"></div>
+                </div>
+                <p class="text-[12px] font-bold text-gray-400 mt-5 tracking-widest uppercase opacity-70">Scanning Market</p>
+            </div>
+
+            <!-- Feed View -->
+            <div id="list-view-container" class="space-y-3 max-w-3xl mx-auto w-full"></div>
+        </main>
+
+        <!-- Detail Page Overlay -->
+        <div id="detail-page" class="fixed inset-0 z-50 bg-[#F7F9FC] transform translate-x-full transition-transform duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] flex flex-col">
+            <header class="px-5 pt-8 pb-4 bg-white/90 backdrop-blur-md border-b border-gray-100 sticky top-0 flex-shrink-0">
+                <div class="max-w-2xl mx-auto w-full flex justify-between items-center">
+                    <button onclick="window.closeDetail()" class="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center text-gray-900 hover:bg-gray-200 transition-colors">
+                        <i class="ph-bold ph-caret-left text-xl"></i>
+                    </button>
+                    <h2 class="text-lg font-extrabold text-gray-900 tracking-tight">AI 심층 분석</h2>
+                    <div class="w-10 h-10"></div>
+                </div>
+            </header>
+            
+            <div class="flex-1 overflow-y-auto no-scrollbar pb-20">
+                <div id="detail-content" class="max-w-2xl mx-auto w-full p-6 space-y-8">
+                    <!-- JS Rendering -->
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- JavaScript -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDmSLJl8LCeZ3mfYGMKl-t5eKPgm-INdtM",
+            authDomain: "todayrate-cf363.firebaseapp.com",
+            projectId: "todayrate-cf363",
+            storageBucket: "todayrate-cf363.firebasestorage.app",
+            messagingSenderId: "874521240006",
+            appId: "1:874521240006:web:ab62ca6be5419af69412c7",
+            measurementId: "G-NG6C8PMVMD"
+        };
+
+        let app, auth, db, currentUser;
+        let appData = null;
+        let currentTab = 'domestic';
+
+        const APP_ID = "todayrate-cf363";
+        const loadingOverlay = document.getElementById('loading-overlay');
+
+        function initFirebase() {
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                signInAnonymously(auth).catch(error => {
+                    console.error("로그인 에러:", error);
+                    loadingOverlay.classList.add('hidden');
+                    showToast("로그인 설정 오류 발생", true);
+                });
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        currentUser = user;
+                        listenToDatabase();
+                    }
+                });
+            } catch (e) {
+                console.error("Firebase 초기화 에러:", e);
+                loadingOverlay.classList.add('hidden');
+            }
+        }
+
+        function listenToDatabase() {
+            if (!currentUser) return;
+            
+            loadingOverlay.classList.remove('hidden');
+            const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'stockpulse', 'latest');
+            
+            onSnapshot(docRef, (docSnap) => {
+                loadingOverlay.classList.add('hidden');
+                
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    appData = data.payload;
+                    
+                    const dateObj = new Date(data.updatedAt);
+                    const kstFormatter = new Intl.DateTimeFormat('ko-KR', {
+                        timeZone: 'Asia/Seoul',
+                        year: 'numeric', month: '2-digit', day: '2-digit',
+                        hour: '2-digit', minute: '2-digit', hour12: false
+                    });
+                    const formattedKST = kstFormatter.format(dateObj);
+                    
+                    document.getElementById('last-update-time').textContent = `LIVE RADAR · ${formattedKST} (KST)`;
+                    
+                    renderList();
+                } else {
+                    appData = null;
+                    document.getElementById('last-update-time').textContent = `NO DATA`;
+                    renderList();
+                }
+            }, (error) => {
+                console.error("Firestore 에러:", error);
+                loadingOverlay.classList.add('hidden');
+            });
+        }
+
+        window.switchTab = function(tab, index) {
+            currentTab = tab;
+            const tabs = ['domestic', 'overseas', 'crypto'];
+            const indicator = document.getElementById('tab-indicator');
+            
+            indicator.style.transform = `translateX(${index * 100}%)`;
+
+            tabs.forEach((t) => {
+                const btn = document.getElementById(`tab-${t}`);
+                if (t === tab) {
+                    btn.classList.replace('text-gray-500', 'text-gray-900');
+                } else {
+                    btn.classList.replace('text-gray-900', 'text-gray-500');
+                }
+            });
+            renderList();
+        };
+
+        window.openDetail = function(index) {
+            const item = appData[currentTab][index];
+            const detailPage = document.getElementById('detail-page');
+            const detailContent = document.getElementById('detail-content');
+            
+            let sentimentColor = 'text-gray-500';
+            let sentimentBg = 'bg-gray-100';
+            if (item.sentiment >= 60) {
+                sentimentColor = 'text-rose-500';
+                sentimentBg = 'bg-rose-50';
+            } else if (item.sentiment <= 40) {
+                sentimentColor = 'text-blue-500';
+                sentimentBg = 'bg-blue-50';
+            }
+            
+            // 키워드(해시태그)를 위로 올림
+            let keywordsHtml = '';
+            if (item.keywords && item.keywords.length > 0) {
+                keywordsHtml = item.keywords.map(k => `
+                    <span class="px-2.5 py-1 bg-gray-100 rounded-lg text-[11px] font-bold text-gray-500 flex items-center gap-0.5">
+                        <i class="ph-bold ph-hash text-[9px] text-gray-400"></i> ${k}
+                    </span>
+                `).join('');
+            }
+
+            // 뉴스 기사 링크 렌더링
+            let newsHtml = '<p class="text-[13px] text-gray-400 italic font-medium pl-2">수집된 뉴스 기사가 없습니다.</p>';
+            if (item.news && item.news.length > 0) {
+                newsHtml = item.news.map(snip => {
+                    if(snip.title && snip.url) {
+                        return `
+                        <a href="${snip.url}" target="_blank" class="flex flex-col gap-2 relative bg-white p-4 rounded-[20px] shadow-sm border border-gray-100 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer group mb-2">
+                            <div class="absolute left-4 top-4 bottom-4 w-1 rounded-full bg-blue-200 group-hover:bg-blue-400 transition-colors"></div>
+                            <p class="text-[14px] text-gray-800 font-bold leading-snug pl-4 tracking-tight group-hover:text-blue-600 transition-colors line-clamp-2">
+                                ${snip.title}
+                            </p>
+                            <div class="pl-4 flex items-center gap-1.5 text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">
+                                <i class="ph-bold ph-newspaper text-sm"></i> 관련 뉴스 보기
+                            </div>
+                        </a>`;
+                    }
+                    return '';
+                }).join('');
+            }
+
+            // 커뮤니티 여론 링크 렌더링
+            let communityHtml = '<p class="text-[13px] text-gray-400 italic font-medium pl-2">수집된 커뮤니티 글이 없습니다.</p>';
+            if (item.community && item.community.length > 0) {
+                communityHtml = item.community.map(snip => {
+                    if(snip.title && snip.url) {
+                        return `
+                        <a href="${snip.url}" target="_blank" class="flex flex-col gap-2 relative bg-white p-4 rounded-[20px] shadow-sm border border-gray-100 hover:border-purple-300 hover:shadow-md transition-all cursor-pointer group mb-2">
+                            <div class="absolute left-4 top-4 bottom-4 w-1 rounded-full bg-purple-200 group-hover:bg-purple-400 transition-colors"></div>
+                            <p class="text-[14px] text-gray-800 font-bold leading-snug pl-4 tracking-tight group-hover:text-purple-600 transition-colors line-clamp-2">
+                                ${snip.title}
+                            </p>
+                            <div class="pl-4 flex items-center gap-1.5 text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">
+                                <i class="ph-bold ph-users-three text-sm"></i> 커뮤니티 글 보기
+                            </div>
+                        </a>`;
+                    }
+                    return '';
+                }).join('');
+            }
+
+            // Market Drivers 렌더링 (한국 시장 색상 기준 적용: 상승=빨강, 위협=파랑)
+            let driversHtml = '';
+            if (item.risk_factors && item.risk_factors.length > 0) {
+                driversHtml = item.risk_factors.map(r => {
+                    if (r.includes('상승 동력')) {
+                        return `<li class="pl-1 leading-relaxed text-rose-600 font-bold"><span class="text-rose-500 mr-1">+</span>${r}</li>`;
+                    } else if (r.includes('위협 요인') || r.includes('리스크')) {
+                        return `<li class="pl-1 leading-relaxed text-blue-600 font-bold"><span class="text-blue-500 mr-1">-</span>${r}</li>`;
+                    }
+                    return `<li class="pl-1 leading-relaxed">${r}</li>`;
+                }).join('');
+            } else {
+                driversHtml = '<li class="pl-1 italic text-gray-400">발견된 특이사항 없음</li>';
+            }
+
+            detailContent.innerHTML = `
+                <!-- Top Hero -->
+                <div class="flex flex-col items-center justify-center text-center pb-6 border-b border-gray-200/60">
+                    <div class="w-16 h-16 rounded-[20px] flex items-center justify-center font-black text-2xl ${sentimentBg} ${sentimentColor} mb-3 shadow-sm">
+                        ${item.rank}
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-gray-900 tracking-tight leading-none">${item.name || "Unknown"}</h2>
+                    <p class="text-[13px] font-bold text-gray-400 uppercase tracking-widest mt-1">${item.code || "N/A"}</p>
+                    
+                    <!-- 해시태그가 종목 이름 아래로 이동 -->
+                    <div class="flex flex-wrap gap-1.5 justify-center mt-3">
+                        ${keywordsHtml}
+                    </div>
+
+                    <!-- 회사 간략 설명 -->
+                    <p class="text-[14px] text-gray-600 font-medium mt-4 px-4 leading-relaxed bg-gray-50/50 py-2.5 rounded-xl inline-block">
+                        ${item.description || "종목 설명이 제공되지 않았습니다."}
+                    </p>
+                    
+                    <div class="flex items-center justify-center mt-5 w-full">
+                        <div class="flex flex-col items-center bg-white px-10 py-4 rounded-[24px] border border-gray-100 shadow-[0_2px_15px_rgb(0,0,0,0.03)]">
+                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Market Sentiment</span>
+                            <div class="flex items-center gap-1 font-black text-3xl ${sentimentColor}">
+                                ${item.sentiment}<span class="text-lg text-gray-300 ml-1">/ 100</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI Insight -->
+                <div class="space-y-3 pt-2">
+                    <div class="flex items-center gap-1.5">
+                        <i class="ph-fill ph-sparkle text-amber-400 text-sm"></i>
+                        <label class="text-[11px] font-black text-gray-500 uppercase tracking-widest">AI Market Insight</label>
+                    </div>
+                    <p class="text-[14px] leading-relaxed text-gray-800 font-medium bg-white p-5 rounded-[24px] shadow-sm border border-gray-100 whitespace-pre-line">
+                        ${item.summary || "No analysis available."}
+                    </p>
+                </div>
+
+                <!-- Market Drivers (Pros & Cons) -->
+                <div class="space-y-2 pt-2">
+                    <div class="flex items-center gap-1.5">
+                        <i class="ph-fill ph-scales text-indigo-400 text-sm"></i>
+                        <label class="text-[11px] font-black text-gray-500 uppercase tracking-widest">Market Drivers</label>
+                    </div>
+                    <ul class="list-none text-[13.5px] text-gray-700 font-medium bg-indigo-50/40 p-5 rounded-[24px] border border-indigo-100/50 space-y-3">
+                        ${driversHtml}
+                    </ul>
+                </div>
+
+                <!-- Source Links (News & Community Split) -->
+                <div class="space-y-5 pt-2 pb-10">
+                    <!-- News Section -->
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-1.5">
+                                <i class="ph-fill ph-newspaper text-blue-500 text-sm"></i>
+                                <label class="text-[11px] font-black text-gray-500 uppercase tracking-widest">Source News</label>
+                            </div>
+                        </div>
+                        <div class="space-y-1">
+                            ${newsHtml}
+                        </div>
+                    </div>
+
+                    <!-- Community Section -->
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-1.5">
+                                <i class="ph-fill ph-users-three text-purple-500 text-sm"></i>
+                                <label class="text-[11px] font-black text-gray-500 uppercase tracking-widest">Community Voice</label>
+                            </div>
+                        </div>
+                        <div class="space-y-1">
+                            ${communityHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            detailPage.classList.remove('translate-x-full');
+        };
+
+        window.closeDetail = function() {
+            const detailPage = document.getElementById('detail-page');
+            detailPage.classList.add('translate-x-full');
+        };
+
+        window.showInfo = function() {
+            showToast("뉴스 및 커뮤니티 데이터를 매일 실시간 스캔합니다.");
+        };
+
+        function showToast(msg, isError = false) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-msg').textContent = msg;
+            if(isError) toast.querySelector('i').className = "ph-fill ph-warning-circle text-red-400 text-lg";
+            else toast.querySelector('i').className = "ph-fill ph-check-circle text-blue-400 text-lg";
+            
+            toast.classList.replace('opacity-0', 'opacity-100');
+            toast.classList.replace('translate-y-[-20px]', 'translate-y-0');
+            
+            setTimeout(() => {
+                toast.classList.replace('opacity-100', 'opacity-0');
+                toast.classList.replace('translate-y-0', 'translate-y-[-20px]');
+            }, 2500);
+        }
+
+        function renderList() {
+            const listContainer = document.getElementById('list-view-container');
+            listContainer.innerHTML = ''; 
+            
+            if(!appData || !appData[currentTab] || appData[currentTab].length === 0) {
+                listContainer.innerHTML = `
+                    <div class="flex flex-col items-center justify-center py-24 opacity-30 animate-fade-up">
+                        <i class="ph-duotone ph-ghost text-6xl mb-4"></i>
+                        <p class="font-bold text-sm tracking-tight">수집된 데이터가 없습니다.</p>
+                    </div>`;
+                return;
+            }
+
+            const data = appData[currentTab];
+            data.forEach((item, index) => {
+                let sentimentColor = 'text-gray-500';
+                let sentimentBg = 'bg-gray-100';
+                if (item.sentiment >= 60) {
+                    sentimentColor = 'text-rose-500';
+                    sentimentBg = 'bg-rose-50';
+                } else if (item.sentiment <= 40) {
+                    sentimentColor = 'text-blue-500';
+                    sentimentBg = 'bg-blue-50';
+                }
+
+                const card = document.createElement('div');
+                card.onclick = () => window.openDetail(index);
+                card.className = "bg-white rounded-[24px] shadow-[0_2px_10px_rgb(0,0,0,0.02)] border border-gray-100/80 cursor-pointer transition-transform hover:scale-[1.01] active:scale-95 duration-300 animate-fade-up group";
+                card.style.animationDelay = `${(index % 10) * 30}ms`;
+
+                card.innerHTML = `
+                    <div class="p-4 sm:p-5 flex items-center justify-between">
+                        <div class="flex items-center gap-4">
+                            <div class="w-11 h-11 rounded-[16px] flex items-center justify-center font-black text-[17px] ${sentimentBg} ${sentimentColor} shadow-sm">
+                                ${item.rank}
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-gray-900 text-[16px] tracking-tight leading-tight">${item.name || "Unknown"}</h3>
+                                <div class="flex items-center gap-1.5 mt-0.5">
+                                    <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">${item.code || "N/A"}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="text-right flex items-center gap-3">
+                            <div class="flex items-center gap-0.5 font-black text-[18px] ${sentimentColor}">
+                                ${item.sentiment}<span class="text-[10px] text-gray-300 font-bold ml-0.5 mt-1">/100</span>
+                            </div>
+                            <i class="ph-bold ph-caret-right text-gray-300 group-hover:text-blue-500 transition-colors"></i>
+                        </div>
+                    </div>
+                `;
+                listContainer.appendChild(card);
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', initFirebase);
+    </script>
+</body>
+</html>
