@@ -154,10 +154,9 @@
 
         let app, auth, db, currentUser;
         let appData = null; 
-        let macroData = null;
-        // [수정] 각 데이터별 업데이트 시간을 따로 저장
+        let macroData = null; 
+        let macroUpdatedAt = null; 
         let stockUpdatedAt = null;
-        let macroUpdatedAt = null;
         
         let currentView = 'market';
         let currentMarketTab = 'domestic';
@@ -169,47 +168,64 @@
         const APP_ID = "todayrate-cf363";
         const loadingOverlay = document.getElementById('loading-overlay');
 
-        // Swipe Gesture
+        // --- Swipe Gesture ---
         let touchStartX = 0; let touchStartY = 0; let touchEndX = 0; let touchEndY = 0;
         const swipeArea = document.getElementById('swipe-area');
+
         const handleSwipe = () => {
             if (currentView !== 'market') return;
             const swipeDistanceX = touchEndX - touchStartX;
             const swipeDistanceY = touchEndY - touchStartY;
             if (Math.abs(swipeDistanceX) > 40 && Math.abs(swipeDistanceX) > Math.abs(swipeDistanceY)) {
-                if (swipeDistanceX < 0 && currentMarketTabIndex < marketTabs.length - 1) window.switchMarketTab(marketTabs[currentMarketTabIndex + 1], currentMarketTabIndex + 1);
-                else if (swipeDistanceX > 0 && currentMarketTabIndex > 0) window.switchMarketTab(marketTabs[currentMarketTabIndex - 1], currentMarketTabIndex - 1);
+                if (swipeDistanceX < 0 && currentMarketTabIndex < marketTabs.length - 1) {
+                    window.switchMarketTab(marketTabs[currentMarketTabIndex + 1], currentMarketTabIndex + 1);
+                } else if (swipeDistanceX > 0 && currentMarketTabIndex > 0) {
+                    window.switchMarketTab(marketTabs[currentMarketTabIndex - 1], currentMarketTabIndex - 1);
+                }
             }
         };
-        swipeArea.addEventListener('touchstart', e => { touchStartX = e.changedTouches[0].clientX; touchStartY = e.changedTouches[0].clientY; }, { passive: true });
-        swipeArea.addEventListener('touchend', e => { touchEndX = e.changedTouches[0].clientX; touchEndY = e.changedTouches[0].clientY; handleSwipe(); }, { passive: true });
 
-        // Back Button
-        let lastTimeBackPress = 0;
-        const initNativeBridge = async () => {
+        swipeArea.addEventListener('touchstart', e => { 
+            touchStartX = e.changedTouches[0].clientX; 
+            touchStartY = e.changedTouches[0].clientY; 
+        }, { passive: true });
+
+        swipeArea.addEventListener('touchend', e => { 
+            touchEndX = e.changedTouches[0].clientX; 
+            touchEndY = e.changedTouches[0].clientY; 
+            handleSwipe(); 
+        }, { passive: true });
+
+        // --- Native Bridge ---
+        const updateStatusBar = async () => {
             const Capacitor = window.Capacitor;
             if (Capacitor && Capacitor.isNativePlatform) {
-                const { App } = Capacitor.Plugins;
                 const { StatusBar } = Capacitor.Plugins;
                 try {
                      await StatusBar.setStyle({ style: 'LIGHT' });
                      await StatusBar.setBackgroundColor({ color: '#ffffff' });
                 } catch(e) {}
-
-                if (App) {
-                    await App.removeAllListeners();
-                    App.addListener('backButton', () => {
-                        const detailPage = document.getElementById('detail-page');
-                        if (!detailPage.classList.contains('translate-x-full')) window.closeDetail();
-                        else {
-                             const currentTime = new Date().getTime();
-                             if (currentTime - lastTimeBackPress < 2000) App.exitApp();
-                             else { window.showToast("'뒤로' 버튼을 한 번 더 누르면 종료됩니다."); lastTimeBackPress = currentTime; }
-                        }
-                    });
-                }
             }
         };
+
+        const initNativeBridge = async () => {
+            const Capacitor = window.Capacitor;
+            if (Capacitor && Capacitor.isNativePlatform) {
+                const { App } = Capacitor.Plugins;
+                updateStatusBar();
+                
+                App?.addListener('backButton', () => {
+                    const detailPage = document.getElementById('detail-page');
+                    if (!detailPage.classList.contains('translate-x-full')) window.closeDetail();
+                    else {
+                        const currentTime = new Date().getTime();
+                        if (currentTime - window.lastTimeBackPress < 2000) App.exitApp();
+                        else { window.showToast("'뒤로' 버튼을 한 번 더 누르면 종료됩니다."); window.lastTimeBackPress = currentTime; }
+                    }
+                });
+            }
+        };
+        window.lastTimeBackPress = 0;
 
         function initFirebase() {
             try {
@@ -222,50 +238,40 @@
         }
 
         function listenToDatabase() {
-            // Stock Data Listener
+            // Stock Data
             const stockRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'stockpulse', 'latest');
             onSnapshot(stockRef, (docSnap) => {
                 loadingOverlay.classList.add('hidden');
                 if (docSnap.exists()) { 
                     const data = docSnap.data();
-                    appData = data.payload || data; // payload 필드가 없으면 root 사용 (호환성)
-                    stockUpdatedAt = data.updatedAt; // 시간 저장
-                    
-                    refreshHeaderTime(); // 헤더 갱신 요청
+                    appData = data.payload || data;
+                    stockUpdatedAt = data.updatedAt;
+                    refreshHeaderTime();
                     if(currentView === 'market') renderMarketList(); 
                 }
             });
 
-            // Macro Data Listener
+            // Macro Data
             const macroRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'macro', 'latest');
             onSnapshot(macroRef, (docSnap) => {
                 if (docSnap.exists()) { 
                     const data = docSnap.data();
                     macroData = data.payload || data;
-                    macroUpdatedAt = data.updatedAt; // 시간 저장
-                    
-                    refreshHeaderTime(); // 헤더 갱신 요청
+                    macroUpdatedAt = data.updatedAt;
+                    refreshHeaderTime();
                     if(currentView === 'briefing') renderBriefing(); 
+                    if(currentView === 'calendar') renderCalendar();
                 }
             });
         }
 
-        // [신규] 현재 보고 있는 탭에 맞춰 헤더 시간을 갱신하는 함수
         function refreshHeaderTime() {
             let targetTime = null;
             let label = "LIVE RADAR";
 
-            // 탭에 따라 어떤 시간을 보여줄지 결정
-            if (currentView === 'market') {
-                targetTime = stockUpdatedAt;
-            } else if (currentView === 'briefing') {
-                targetTime = macroUpdatedAt;
-                label = "MACRO BRIEFING";
-            } else if (currentView === 'calendar') {
-                // 캘린더는 매크로 데이터 기준
-                targetTime = macroUpdatedAt;
-                label = "ECONOMIC CALENDAR";
-            }
+            if (currentView === 'market') targetTime = stockUpdatedAt;
+            else if (currentView === 'briefing') { targetTime = macroUpdatedAt; label = "MACRO BRIEFING"; }
+            else if (currentView === 'calendar') { targetTime = macroUpdatedAt; label = "ECONOMIC CALENDAR"; }
 
             const timeElement = document.getElementById('last-update-time');
             
@@ -276,27 +282,19 @@
                         timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
                         hour: '2-digit', minute: '2-digit', hour12: false
                     });
-                    // 날짜 유효성 체크
-                    if (isNaN(dateObj.getTime())) throw new Error("Invalid Date");
-                    
                     timeElement.textContent = `${label} · ${kstFormatter.format(dateObj)} (KST)`;
                 } catch (e) {
                     timeElement.textContent = `${label} · UPDATED`;
                 }
             } else {
-                // 데이터가 아직 안 왔을 때
-                if (currentView === 'market' && appData) return; // 이미 데이터가 있으면 유지
                 timeElement.textContent = "CONNECTING...";
             }
         }
 
-        // --- [수정된 히스토리 로드 함수] ---
-        // currentUser 변수 대신 auth.currentUser를 직접 사용하여 인증 상태를 확실하게 체크
+        // --- 히스토리 로드 함수 ---
         async function fetchHistory(market, code) {
-            if (!auth || !auth.currentUser) {
-                console.warn("로그인되지 않아 히스토리를 가져올 수 없습니다.");
-                return null;
-            }
+            // currentUser 전역 변수 체크
+            if (!currentUser) return null;
 
             const safeCode = String(code).replace(/[^a-zA-Z0-9]/g, '');
             const docId = `${market}_${safeCode}`;
@@ -305,10 +303,7 @@
             try {
                 const snap = await getDoc(docRef);
                 if (snap.exists()) {
-                    console.log("History loaded for", docId);
                     return snap.data().history;
-                } else {
-                    console.log("No history found for", docId);
                 }
             } catch (e) { 
                 console.error("History fetch error:", e); 
@@ -329,12 +324,10 @@
                 btn.className = `flex-1 flex flex-col items-center justify-center py-3 transition-colors duration-200 ${id === view ? 'text-blue-600' : 'text-gray-400'}`;
             });
             document.getElementById('category-tabs-container').classList.toggle('hidden', view !== 'market');
-            
-            // 뷰 전환 시 헤더 시간도 같이 갱신
             refreshHeaderTime();
 
-            if (view === 'market') renderMarketList();
-            else if (view === 'briefing') renderBriefing();
+            if (view === 'market') renderMarketList(); 
+            else if (view === 'briefing') renderBriefing(); 
             else if (view === 'calendar') renderCalendar();
         };
 
@@ -351,8 +344,6 @@
             const detailContent = document.getElementById('detail-content');
             document.getElementById('detail-scroll-area').scrollTop = 0;
 
-            // ... (HTML 생성 코드는 기존과 동일하므로 생략 - 스타일 유지) ...
-            // [중략] ... 상세 페이지 HTML 생성 부분 ...
             let sentimentColor = item.sentiment >= 60 ? 'text-rose-500' : (item.sentiment <= 40 ? 'text-blue-500' : 'text-gray-500');
             let sentimentBg = item.sentiment >= 60 ? 'bg-rose-50' : (item.sentiment <= 40 ? 'bg-blue-50' : 'bg-gray-100');
             
@@ -440,16 +431,15 @@
                 </div>`;
             
             detailPage.classList.remove('translate-x-full');
-            
+
             // --- Chart Logic ---
             const ctx = document.getElementById('sentimentChart').getContext('2d');
             if(chartInstance) chartInstance.destroy();
 
-            // 초기값 (오늘 데이터만)
+            // Default: Today only
             let labels = ['Today'];
             let points = [item.sentiment];
 
-            // 1. 차트 먼저 그리기
             chartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
@@ -466,7 +456,7 @@
                             return gradient;
                         },
                         borderWidth: 3,
-                        pointRadius: 4,
+                        pointRadius: 5,
                         pointBackgroundColor: '#fff',
                         pointBorderWidth: 2,
                         tension: 0.4,
@@ -476,22 +466,19 @@
                 options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { display: false, min: 0, max: 100 }, x: { grid: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } } } }
             });
 
-            // 2. 히스토리 데이터 가져와서 업데이트
+            // Fetch Real History
             fetchHistory(currentMarketTab, item.code).then(history => {
                 if (history && Object.keys(history).length > 0) {
                     const sortedDates = Object.keys(history).sort();
+                    let historyLabels = sortedDates.map(d => d.slice(5)); 
+                    let historyPoints = sortedDates.map(d => history[d].sentiment);
                     
-                    const historyLabels = sortedDates.map(d => d.slice(5)); 
-                    const historyPoints = sortedDates.map(d => history[d].sentiment);
-                    
-                    // 오늘 데이터 중복 체크 및 추가
                     const todayStr = new Date().toISOString().split('T')[0];
                     if (!history[todayStr]) {
                         historyLabels.push('Today');
                         historyPoints.push(item.sentiment);
                     }
                     
-                    // 차트 데이터 교체
                     chartInstance.data.labels = historyLabels;
                     chartInstance.data.datasets[0].data = historyPoints;
                     chartInstance.update();
@@ -521,7 +508,7 @@
                             <div class="flex items-center gap-4">
                                 <div class="w-11 h-11 rounded-[16px] flex items-center justify-center font-black text-[17px] ${sentimentBg} ${sentimentColor}">${item.rank}</div>
                                 <div>
-                                    <h3 class="font-bold text-gray-900 text-[16px] leading-tight">${item.name}</h3>
+                                    <h3 class="font-bold text-gray-900 text-[16px] tracking-tight leading-tight">${item.name}</h3>
                                     <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">${item.code}</span>
                                 </div>
                             </div>
@@ -540,13 +527,46 @@
             const container = document.getElementById('content-container');
             container.innerHTML = '';
             if(!macroData) { container.innerHTML = `<div class="py-20 text-center text-gray-400 font-bold animate-fade-up">브리핑 데이터를 수집 중입니다.</div>`; return; }
-            // (브리핑 렌더링 로직은 기존과 동일)
-            // ...
+
+            let globalSummaryHtml = macroData.global_summary ? `<div class="mb-8 mt-2"><h2 class="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-4 px-1 flex items-center gap-1.5"><i class="ph-fill ph-trend-up text-blue-600"></i> Market Overview</h2><div class="bg-white p-6 rounded-[28px] shadow-sm border border-gray-100 animate-fade-up relative overflow-hidden group"><div class="absolute top-0 right-0 w-24 h-24 bg-blue-50/50 rounded-bl-[40px] -mr-6 -mt-6 transition-transform group-hover:scale-110 duration-700"></div><div class="relative z-10"><div class="flex items-center justify-between mb-3"><span class="text-[10px] font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg uppercase tracking-wide">Global Summary</span></div><p class="text-[16px] font-bold text-gray-800 leading-relaxed tracking-tight">"${macroData.global_summary}"</p></div></div></div>` : '';
+
+            let briefingHtml = (macroData.briefing || []).map(b => `<div class="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100 mb-3 animate-fade-up"><div class="flex items-center justify-between mb-3 border-b border-gray-50 pb-2"><div class="flex items-center gap-2"><span class="text-xl">${b.flag || '🌐'}</span><span class="text-[13px] font-black text-gray-900 uppercase tracking-wide">${b.country || 'Unknown'} Market Check</span></div></div><p class="text-[14px] text-gray-600 font-medium leading-relaxed">${b.summary}</p></div>`).join('');
+
+            let calendarResultsHtml = (macroData.calendar_results || []).map(evt => {
+                let impactColor = evt.impact_color === 'red' ? 'text-rose-600 bg-rose-50' : (evt.impact_color === 'green' ? 'text-green-600 bg-green-50' : 'text-gray-600 bg-gray-100');
+                let dateDisplay = evt.date ? evt.date.substring(5).replace('-', '.') : '';
+                return `<div class="flex flex-col gap-2 py-4 border-b border-gray-100 last:border-0 animate-fade-up"><div class="flex justify-between items-start"><div class="flex items-center gap-2"><span class="text-[11px] font-bold text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">${dateDisplay} ${evt.time}</span><span class="text-[14px] font-bold text-gray-900 leading-snug">${evt.event}</span></div></div><div class="flex items-center gap-4 pl-1"><div class="flex flex-col"><span class="text-[10px] text-gray-400 font-bold uppercase">Actual</span><span class="text-[13px] font-black ${impactColor.split(' ')[0]}">${evt.actual}</span></div><div class="w-[1px] h-6 bg-gray-100"></div><div class="flex flex-col"><span class="text-[10px] text-gray-400 font-bold uppercase">Forecast</span><span class="text-[13px] font-bold text-gray-600">${evt.forecast}</span></div><div class="flex flex-col"><span class="text-[10px] text-gray-400 font-bold uppercase">Previous</span><span class="text-[13px] font-bold text-gray-400">${evt.previous || "-"}</span></div></div><div class="mt-1 bg-gray-50/80 p-3 rounded-xl"><p class="text-[12px] font-bold text-gray-700 flex items-start gap-1.5 leading-snug"><i class="ph-fill ph-lightbulb text-amber-400 text-sm mt-0.5"></i>${evt.impact}</p></div></div>`;
+            }).join('');
+
+            container.innerHTML = `${globalSummaryHtml}<div class="mb-8"><h2 class="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-4 px-1 flex items-center gap-1.5"><i class="ph-fill ph-globe text-blue-500"></i> Global Morning Brief</h2>${briefingHtml}</div><div><h2 class="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-4 px-1 flex items-center gap-1.5"><i class="ph-fill ph-check-circle text-rose-500"></i> Recent Key Results</h2><div class="bg-white rounded-[24px] shadow-sm border border-gray-100 px-5 py-2">${calendarResultsHtml}</div></div>`;
+            container.style.opacity = '1';
         }
 
         function renderCalendar() {
-             // (캘린더 렌더링 로직은 기존과 동일)
-             // ...
+            const container = document.getElementById('content-container');
+            container.innerHTML = '';
+            if (!macroData || !macroData.upcoming_events || macroData.upcoming_events.length === 0) {
+                container.innerHTML = `<div class="py-20 text-center text-gray-400 font-bold animate-fade-up">예정된 일정이 없습니다.</div>`;
+                return;
+            }
+            const eventsByDate = macroData.upcoming_events.reduce((acc, evt) => { if (!acc[evt.date]) acc[evt.date] = []; acc[evt.date].push(evt); return acc; }, {});
+            const sortedDates = Object.keys(eventsByDate).sort();
+            let html = '<div class="space-y-6">';
+            sortedDates.forEach(dateStr => {
+                const dateObj = new Date(dateStr);
+                const dayName = new Intl.DateTimeFormat('ko-KR', { weekday: 'short' }).format(dateObj);
+                const displayDate = `${dateObj.getMonth() + 1}. ${dateObj.getDate()} (${dayName})`;
+                const isToday = dateStr === new Date().toISOString().split('T')[0];
+                html += `<div class="animate-fade-up"><div class="flex items-center gap-2 mb-3 px-1"><h3 class="text-lg font-black text-gray-900 ${isToday ? 'text-blue-600' : ''}">${displayDate}</h3>${isToday ? '<span class="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-bold">TODAY</span>' : ''}</div><div class="bg-white rounded-[24px] shadow-sm border border-gray-100 overflow-hidden">`;
+                eventsByDate[dateStr].forEach((evt, idx) => {
+                    const borderClass = idx !== eventsByDate[dateStr].length - 1 ? 'border-b border-gray-50' : '';
+                    html += `<div class="p-4 flex gap-4 items-start ${borderClass}"><div class="flex flex-col items-center min-w-[44px] pt-0.5"><span class="text-[11px] font-bold text-gray-500 bg-gray-50 px-2 py-1 rounded-lg">${evt.time}</span></div><div class="flex-1"><span class="text-[14px] font-bold text-gray-800 leading-snug">${evt.event}</span></div></div>`;
+                });
+                html += `</div></div>`;
+            });
+            html += '</div>';
+            container.innerHTML = html;
+            container.style.opacity = '1';
         }
 
         document.addEventListener('DOMContentLoaded', () => { initFirebase(); initNativeBridge(); });
