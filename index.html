@@ -14,6 +14,7 @@
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
+    <!-- Pretendard Font -->
     <style>
         @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
         
@@ -151,15 +152,24 @@
             measurementId: "G-NG6C8PMVMD"
         };
 
-        let app, auth, db, currentUser, appData, macroData, macroUpdatedAt, chartInstance;
-        let currentView = 'market', currentMarketTab = 'domestic', currentMarketTabIndex = 0;
-        const marketTabs = ['domestic', 'overseas', 'crypto'], APP_ID = "todayrate-cf363";
+        let app, auth, db, currentUser;
+        let appData = null; 
+        let macroData = null; 
+        let macroUpdatedAt = null; 
+        
+        let currentView = 'market';
+        let currentMarketTab = 'domestic';
+        let currentMarketTabIndex = 0;
+        let selectedDate = new Date().toISOString().split('T')[0];
+
+        let chartInstance = null;
+        const marketTabs = ['domestic', 'overseas', 'crypto'];
+        const APP_ID = "todayrate-cf363";
         const loadingOverlay = document.getElementById('loading-overlay');
 
-        // --- Swipe Gesture ---
+        // Swipe Gesture
         let touchStartX = 0; let touchStartY = 0; let touchEndX = 0; let touchEndY = 0;
         const swipeArea = document.getElementById('swipe-area');
-
         const handleSwipe = () => {
             if (currentView !== 'market') return;
             const swipeDistanceX = touchEndX - touchStartX;
@@ -172,207 +182,153 @@
                 }
             }
         };
+        swipeArea.addEventListener('touchstart', e => { touchStartX = e.changedTouches[0].clientX; touchStartY = e.changedTouches[0].clientY; }, { passive: true });
+        swipeArea.addEventListener('touchend', e => { touchEndX = e.changedTouches[0].clientX; touchEndY = e.changedTouches[0].clientY; handleSwipe(); }, { passive: true });
 
-        swipeArea.addEventListener('touchstart', e => { 
-            touchStartX = e.changedTouches[0].clientX; 
-            touchStartY = e.changedTouches[0].clientY; 
-        }, { passive: true });
-
-        swipeArea.addEventListener('touchend', e => { 
-            touchEndX = e.changedTouches[0].clientX; 
-            touchEndY = e.changedTouches[0].clientY; 
-            handleSwipe(); 
-        }, { passive: true });
-
-        // --- Native Bridge ---
-        const updateStatusBar = async () => {
-            const Capacitor = window.Capacitor;
-            if (Capacitor && Capacitor.isNativePlatform) {
-                const { StatusBar } = Capacitor.Plugins;
-                try {
-                    await StatusBar.setStyle({ style: 'LIGHT' });
-                    await StatusBar.setBackgroundColor({ color: '#ffffff' });
-                } catch (e) { console.warn(e); }
-            }
-        };
-
+        // Native Bridge
+        let lastTimeBackPress = 0;
         const initNativeBridge = async () => {
             const Capacitor = window.Capacitor;
             if (Capacitor && Capacitor.isNativePlatform) {
                 const { App } = Capacitor.Plugins;
-                updateStatusBar();
-                
-                App?.addListener('backButton', () => {
-                    const detailPage = document.getElementById('detail-page');
-                    if (!detailPage.classList.contains('translate-x-full')) window.closeDetail();
-                    else {
-                        const currentTime = new Date().getTime();
-                        if (currentTime - lastTimeBackPress < 2000) App.exitApp();
-                        else { window.showToast("'뒤로' 버튼을 한 번 더 누르면 종료됩니다."); lastTimeBackPress = currentTime; }
-                    }
-                });
+                const { StatusBar } = Capacitor.Plugins;
+                try {
+                     await StatusBar.setStyle({ style: 'LIGHT' });
+                     await StatusBar.setBackgroundColor({ color: '#ffffff' });
+                } catch(e) {}
+
+                if (App) {
+                    await App.removeAllListeners();
+                    App.addListener('backButton', () => {
+                        const detailPage = document.getElementById('detail-page');
+                        if (!detailPage.classList.contains('translate-x-full')) window.closeDetail();
+                        else {
+                             const currentTime = new Date().getTime();
+                             if (currentTime - lastTimeBackPress < 2000) App.exitApp();
+                             else { window.showToast("'뒤로' 버튼을 한 번 더 누르면 종료됩니다."); lastTimeBackPress = currentTime; }
+                        }
+                    });
+                }
             }
         };
 
-        // --- Fetch History (히스토리 데이터 로드 함수 추가) ---
+        function initFirebase() {
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                signInAnonymously(auth);
+                onAuthStateChanged(auth, (user) => { if (user) { currentUser = user; listenToDatabase(); } });
+            } catch (e) { console.error(e); }
+        }
+
+        function listenToDatabase() {
+            const stockRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'stockpulse', 'latest');
+            onSnapshot(stockRef, (docSnap) => {
+                loadingOverlay.classList.add('hidden');
+                if (docSnap.exists()) { 
+                    appData = snapToData(docSnap);
+                    if(currentView === 'market') renderMarketList(); 
+                }
+            });
+            const macroRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'macro', 'latest');
+            onSnapshot(macroRef, (docSnap) => {
+                if (docSnap.exists()) { 
+                    const data = snapToData(docSnap);
+                    macroData = data; 
+                    macroUpdatedAt = data.updatedAt;
+                    if(currentView === 'briefing') renderBriefing(); 
+                }
+            });
+        }
+        
+        function snapToData(snap) {
+            const d = snap.data();
+            return d.payload ? d.payload : d;
+        }
+
         async function fetchHistory(market, code) {
-            if (!db) return null;
+            if (!currentUser) return null;
             const safeCode = String(code).replace(/[^a-zA-Z0-9]/g, '');
             const docId = `${market}_${safeCode}`;
             const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'stock_history', docId);
             try {
                 const snap = await getDoc(docRef);
-                if (snap.exists()) return snap.data().history;
+                if (snap.exists()) {
+                    return snap.data().history;
+                }
             } catch (e) { console.error("History fetch error:", e); }
             return null;
         }
 
-        function renderMarketList() {
-            const container = document.getElementById('content-container');
-            container.style.opacity = '0';
-            setTimeout(() => {
-                container.innerHTML = '';
-                if(!appData || !appData[currentMarketTab]) {
-                    container.innerHTML = `<div class="py-20 text-center text-gray-400 font-bold animate-fade-up">데이터가 없습니다.</div>`;
-                } else {
-                    appData[currentMarketTab].forEach((item, index) => {
-                        let sentimentColor = item.sentiment >= 60 ? 'text-rose-500' : (item.sentiment <= 40 ? 'text-blue-500' : 'text-gray-500');
-                        let sentimentBg = item.sentiment >= 60 ? 'bg-rose-50' : (item.sentiment <= 40 ? 'bg-blue-50' : 'bg-gray-100');
-                        const card = document.createElement('div');
-                        card.onclick = () => window.openDetail(index);
-                        card.className = "bg-white rounded-[24px] shadow-sm border border-gray-100/80 cursor-pointer transition-all active:scale-95 animate-fade-up p-4 sm:p-5 flex items-center justify-between group";
-                        card.innerHTML = `
-                            <div class="flex items-center gap-4">
-                                <div class="w-11 h-11 rounded-[16px] flex items-center justify-center font-black text-[17px] ${sentimentBg} ${sentimentColor}">${item.rank}</div>
-                                <div>
-                                    <h3 class="font-bold text-gray-900 text-[16px] leading-tight">${item.name}</h3>
-                                    <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">${item.code}</span>
-                                </div>
-                            </div>
-                            <div class="flex items-center gap-3">
-                                <div class="font-black text-[18px] ${sentimentColor}">${item.sentiment}<span class="text-[10px] text-gray-300 ml-0.5">/100</span></div>
-                                <i class="ph-bold ph-caret-right text-gray-300 group-hover:text-blue-500 transition-colors"></i>
-                            </div>`;
-                        container.appendChild(card);
-                    });
-                }
-                container.style.opacity = '1';
-            }, 100);
-        }
+        window.openStockPlus = function(code) {
+            const url = `https://stockplus.com/m/stocks/KOREA-A${code}`;
+            window.open(url, '_system');
+        };
 
-        function renderBriefing() {
-            const container = document.getElementById('content-container');
-            container.innerHTML = '';
-            if(!macroData) { container.innerHTML = `<div class="py-20 text-center text-gray-400 font-bold animate-fade-up">브리핑 데이터를 수집 중입니다.</div>`; return; }
-
-            let timeLabel = "";
-            if (macroUpdatedAt) {
-                const d = new Date(macroUpdatedAt);
-                timeLabel = new Intl.DateTimeFormat('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
-            }
-
-            let globalSummaryHtml = macroData.global_summary ? `
-                <div class="mb-8 mt-2">
-                    <h2 class="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-4 px-1 flex items-center gap-1.5"><i class="ph-fill ph-trend-up text-blue-600"></i> Market Overview</h2>
-                    <div class="bg-white p-6 rounded-[28px] shadow-sm border border-gray-100 animate-fade-up relative overflow-hidden group">
-                        <div class="absolute top-0 right-0 w-24 h-24 bg-blue-50/50 rounded-bl-[40px] -mr-6 -mt-6 transition-transform group-hover:scale-110 duration-700"></div>
-                        <div class="relative z-10">
-                            <div class="flex items-center justify-between mb-3">
-                                <span class="text-[10px] font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg uppercase tracking-wide">Global Summary</span>
-                                <span class="text-[10px] font-bold text-gray-400 flex items-center gap-1 bg-gray-50 px-2 py-0.5 rounded-lg"><i class="ph-bold ph-clock"></i> ${timeLabel}</span>
-                            </div>
-                            <p class="text-[16px] font-bold text-gray-800 leading-relaxed tracking-tight">"${macroData.global_summary}"</p>
-                        </div>
-                    </div>
-                </div>` : '';
-
-            let briefingHtml = (macroData.briefing || []).map(b => `
-                <div class="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100 mb-3 animate-fade-up">
-                    <div class="flex items-center justify-between mb-3 border-b border-gray-50 pb-2">
-                        <div class="flex items-center gap-2">
-                            <span class="text-xl">${b.flag || '🌐'}</span>
-                            <span class="text-[13px] font-black text-gray-900 uppercase tracking-wide">${b.country || 'Unknown'} Market Check</span>
-                        </div>
-                    </div>
-                    <p class="text-[14px] text-gray-600 font-medium leading-relaxed">${b.summary}</p>
-                </div>`).join('');
-
-            let calendarResultsHtml = (macroData.calendar_results || []).map(evt => {
-                let impactColor = evt.impact_color === 'red' ? 'text-rose-600 bg-rose-50' : (evt.impact_color === 'green' ? 'text-green-600 bg-green-50' : 'text-gray-600 bg-gray-100');
-                let dateDisplay = evt.date ? evt.date.substring(5).replace('-', '.') : '';
-                return `
-                    <div class="flex flex-col gap-2 py-4 border-b border-gray-100 last:border-0 animate-fade-up">
-                        <div class="flex justify-between items-start">
-                            <div class="flex items-center gap-2">
-                                <span class="text-[11px] font-bold text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">${dateDisplay} ${evt.time}</span>
-                                <span class="text-[14px] font-bold text-gray-900 leading-snug">${evt.event}</span>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-4 pl-1">
-                            <div class="flex flex-col"><span class="text-[10px] text-gray-400 font-bold uppercase">Actual</span><span class="text-[13px] font-black ${impactColor.split(' ')[0]}">${evt.actual}</span></div>
-                            <div class="w-[1px] h-6 bg-gray-100"></div>
-                            <div class="flex flex-col"><span class="text-[10px] text-gray-400 font-bold uppercase">Forecast</span><span class="text-[13px] font-bold text-gray-600">${evt.forecast}</span></div>
-                            <div class="flex flex-col"><span class="text-[10px] text-gray-400 font-bold uppercase">Previous</span><span class="text-[13px] font-bold text-gray-400">${evt.previous || "-"}</span></div>
-                        </div>
-                        <div class="mt-1 bg-gray-50/80 p-3 rounded-xl"><p class="text-[12px] font-bold text-gray-700 flex items-start gap-1.5 leading-snug"><i class="ph-fill ph-lightbulb text-amber-400 text-sm mt-0.5"></i>${evt.impact}</p></div>
-                    </div>`;
-            }).join('');
-
-            container.innerHTML = `
-                ${globalSummaryHtml}
-                <div class="mb-8"><h2 class="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-4 px-1 flex items-center gap-1.5"><i class="ph-fill ph-globe text-blue-500"></i> Global Morning Brief</h2>${briefingHtml}</div>
-                <div>
-                    <h2 class="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-4 px-1 flex items-center gap-1.5"><i class="ph-fill ph-check-circle text-rose-500"></i> Recent Key Results</h2>
-                    <div class="bg-white rounded-[24px] shadow-sm border border-gray-100 px-5 py-2">${calendarResultsHtml || '<p class="text-xs text-gray-400 py-6 text-center italic font-bold">최근 발표된 주요 지표 없음</p>'}</div>
-                </div>`;
-            container.style.opacity = '1';
-        }
-
-        function renderCalendar() {
-            const container = document.getElementById('content-container');
-            container.innerHTML = '';
-            if (!macroData || !macroData.upcoming_events || macroData.upcoming_events.length === 0) {
-                container.innerHTML = `<div class="py-20 text-center text-gray-400 font-bold animate-fade-up">예정된 일정이 없습니다.</div>`;
-                return;
-            }
-            const eventsByDate = macroData.upcoming_events.reduce((acc, evt) => { if (!acc[evt.date]) acc[evt.date] = []; acc[evt.date].push(evt); return acc; }, {});
-            const sortedDates = Object.keys(eventsByDate).sort();
-            let html = '<div class="space-y-6">';
-            sortedDates.forEach(dateStr => {
-                const dateObj = new Date(dateStr);
-                const dayName = new Intl.DateTimeFormat('ko-KR', { weekday: 'short' }).format(dateObj);
-                const displayDate = `${dateObj.getMonth() + 1}. ${dateObj.getDate()} (${dayName})`;
-                const isToday = dateStr === new Date().toISOString().split('T')[0];
-                html += `<div class="animate-fade-up">
-                    <div class="flex items-center gap-2 mb-3 px-1">
-                        <h3 class="text-lg font-black text-gray-900 ${isToday ? 'text-blue-600' : ''}">${displayDate}</h3>
-                        ${isToday ? '<span class="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-bold">TODAY</span>' : ''}
-                    </div>
-                    <div class="bg-white rounded-[24px] shadow-sm border border-gray-100 overflow-hidden">`;
-                eventsByDate[dateStr].forEach((evt, idx) => {
-                    const borderClass = idx !== eventsByDate[dateStr].length - 1 ? 'border-b border-gray-50' : '';
-                    html += `<div class="p-4 flex gap-4 items-start ${borderClass}">
-                        <div class="flex flex-col items-center min-w-[44px] pt-0.5"><span class="text-[11px] font-bold text-gray-500 bg-gray-50 px-2 py-1 rounded-lg">${evt.time}</span></div>
-                        <div class="flex-1"><span class="text-[14px] font-bold text-gray-800 leading-snug">${evt.event}</span></div>
-                    </div>`;
-                });
-                html += `</div></div>`;
+        window.switchMainView = function(view) {
+            currentView = view;
+            const navIds = ['market', 'briefing', 'calendar'];
+            navIds.forEach(id => {
+                const btn = document.getElementById(`nav-${id}`);
+                btn.className = `flex-1 flex flex-col items-center justify-center py-3 transition-colors duration-200 ${id === view ? 'text-blue-600' : 'text-gray-400'}`;
             });
-            html += '</div>';
-            container.innerHTML = html;
-            container.style.opacity = '1';
-        }
+            document.getElementById('category-tabs-container').classList.toggle('hidden', view !== 'market');
+            if (view === 'market') renderMarketList(); else if (view === 'briefing') renderBriefing(); else if (view === 'calendar') renderCalendar();
+        };
+
+        window.switchMarketTab = function(tab, index) {
+            currentMarketTab = tab; currentMarketTabIndex = index;
+            document.getElementById('tab-indicator').style.transform = `translateX(${index * 100}%)`;
+            marketTabs.forEach((t, i) => document.getElementById(`tab-${t}`).className = `relative z-10 flex-1 py-2.5 text-[13px] font-bold ${i === index ? 'text-gray-900' : 'text-gray-500'} transition-colors flex items-center justify-center gap-1.5`);
+            renderMarketList();
+        };
 
         window.openDetail = function(index) {
             const item = appData[currentMarketTab][index];
             const detailPage = document.getElementById('detail-page');
             const detailContent = document.getElementById('detail-content');
+            document.getElementById('detail-scroll-area').scrollTop = 0;
+
             let sentimentColor = item.sentiment >= 60 ? 'text-rose-500' : (item.sentiment <= 40 ? 'text-blue-500' : 'text-gray-500');
             let sentimentBg = item.sentiment >= 60 ? 'bg-rose-50' : (item.sentiment <= 40 ? 'bg-blue-50' : 'bg-gray-100');
             
+            let actionButtonsHtml = '';
             let tvSymbol = item.code;
             if (currentMarketTab === 'domestic') tvSymbol = `KRX:${item.code}`;
             else if (currentMarketTab === 'crypto') tvSymbol = `BINANCE:${item.code}USDT`; 
+            
+            actionButtonsHtml += `
+                <a href="https://www.tradingview.com/chart/?symbol=${tvSymbol}" target="_blank" class="flex-1 bg-gray-900 text-white py-3.5 px-4 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-transform">
+                    <i class="ph-bold ph-chart-line-up text-lg"></i> TradingView
+                </a>
+            `;
+
+            if (currentMarketTab === 'domestic') {
+                actionButtonsHtml += `
+                    <button onclick="window.openStockPlus('${item.code}')" class="flex-1 bg-blue-600 text-white py-3.5 px-4 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 shadow-lg shadow-blue-200 active:scale-95 transition-transform">
+                        <i class="ph-bold ph-device-mobile text-lg"></i> 증권플러스
+                    </button>
+                `;
+            }
+
+            let newsHtml = '<p class="text-xs text-gray-400 italic">뉴스가 없습니다.</p>';
+            if (item.news && item.news.length > 0) {
+                newsHtml = item.news.map(n => `
+                    <a href="${n.url}" target="_blank" class="flex flex-col gap-2 relative bg-white p-4 rounded-[20px] shadow-sm border border-gray-100 mb-2 group hover:border-blue-200">
+                        <div class="absolute left-4 top-4 bottom-4 w-1 rounded-full bg-blue-100 group-hover:bg-blue-300 transition-colors"></div>
+                        <p class="text-[14px] text-gray-800 font-bold leading-snug pl-4 line-clamp-2">${n.title}</p>
+                        <div class="pl-4 flex items-center gap-1.5 text-[10px] text-gray-400 font-black uppercase tracking-widest mt-1">
+                            <i class="ph-bold ph-newspaper"></i> 뉴스 원문 보기
+                        </div>
+                    </a>`).join('');
+            }
+
+            let driversHtml = (item.risk_factors || []).map(r => {
+                if (r.includes('상승 동력')) return `<li class="pl-1 text-rose-600 font-bold"><span class="mr-1">+</span>${r}</li>`;
+                if (r.includes('위협 요인')) return `<li class="pl-1 text-blue-600 font-bold"><span class="mr-1">-</span>${r}</li>`;
+                return `<li>${r}</li>`;
+            }).join('');
 
             let formattedSummary = item.summary || "요약 정보가 없습니다.";
             formattedSummary = formattedSummary.replace(/(\[.*?\])/g, '<br/><span class="text-blue-600 font-black text-[13px]">$1</span>');
@@ -383,8 +339,8 @@
                     <h2 class="text-3xl font-extrabold text-gray-900 leading-none mt-4">${item.name}</h2>
                     <p class="text-[13px] font-bold text-gray-400 uppercase tracking-widest mt-1">${item.code}</p>
                     <div class="flex flex-wrap gap-1.5 justify-center mt-3">${(item.keywords || []).map(k => `<span class="px-2.5 py-1 bg-gray-100 rounded-lg text-[11px] font-bold text-gray-500"># ${k}</span>`).join('')}</div>
+                    <p class="text-[14px] text-gray-600 font-medium mt-4 px-4 leading-relaxed bg-gray-50/50 py-2.5 rounded-xl">${item.description || ""}</p>
                     
-                    <!-- Sentiment Trend Section -->
                     <div class="mt-5 w-full bg-white px-6 py-5 rounded-[24px] border border-gray-100 shadow-sm">
                         <div class="flex justify-between items-center mb-4">
                             <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Sentiment Trend</span>
@@ -395,35 +351,49 @@
                         </div>
                     </div>
 
-                    <div class="flex gap-3 w-full mt-5">
-                        <a href="https://www.tradingview.com/chart/?symbol=${tvSymbol}" target="_blank" class="flex-1 bg-gray-900 text-white py-3.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-transform"><i class="ph-bold ph-chart-line-up text-lg"></i> TradingView</a>
+                    <div class="flex gap-3 w-full mt-5 px-1">
+                        ${actionButtonsHtml}
                     </div>
                 </div>
-                <div class="space-y-2 pt-2"><label class="text-[11px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5"><i class="ph-fill ph-article text-gray-400"></i> Market Summary</label><p class="text-[15px] leading-relaxed text-gray-800 font-bold bg-white p-5 rounded-[24px] shadow-sm border border-gray-100">${formattedSummary}</p></div>
-                <div class="space-y-2 pt-2"><label class="text-[11px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5"><i class="ph-fill ph-scales text-indigo-400"></i> AI Score Reasoning</label><p class="text-[14px] leading-relaxed text-gray-700 font-medium bg-indigo-50/40 p-5 rounded-[24px] border border-indigo-100/50 whitespace-pre-line">${item.scoring_reason || "사유 없음"}</p></div>`;
+                
+                <div class="space-y-2 pt-2">
+                    <label class="text-[11px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><i class="ph-fill ph-article text-gray-400"></i> Market Summary</label>
+                    <p class="text-[15px] leading-relaxed text-gray-800 font-bold bg-white p-5 rounded-[24px] shadow-sm border border-gray-100">${formattedSummary}</p>
+                </div>
+
+                <div class="space-y-2 pt-2">
+                    <label class="text-[11px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><i class="ph-fill ph-scales text-indigo-400"></i> AI Score Reasoning</label>
+                    <p class="text-[14px] leading-relaxed text-gray-700 font-medium bg-indigo-50/40 p-5 rounded-[24px] border border-indigo-100/50 whitespace-pre-line">${item.scoring_reason || "사유 없음"}</p>
+                </div>
+
+                <div class="space-y-2 pt-2">
+                    <label class="text-[11px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><i class="ph-fill ph-sparkle text-amber-400"></i> Market Drivers</label>
+                    <ul class="text-[13.5px] text-gray-700 font-medium bg-white p-5 rounded-[24px] border border-gray-100 space-y-3 list-none">${driversHtml}</ul>
+                </div>
+
+                <div class="space-y-3 pt-2 pb-10">
+                    <label class="text-[11px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-1.5 mb-3"><i class="ph-fill ph-newspaper text-blue-500"></i> Related News</label>
+                    <div class="space-y-1">${newsHtml}</div>
+                </div>`;
             
             detailPage.classList.remove('translate-x-full');
-            
+
             const ctx = document.getElementById('sentimentChart').getContext('2d');
             if(chartInstance) chartInstance.destroy();
 
-            // --- 히스토리 데이터를 기반으로 차트 업데이트 로직 복구 ---
             let labels = ['Today'];
             let points = [item.sentiment];
 
             fetchHistory(currentMarketTab, item.code).then(history => {
                 if (history) {
                     const sortedDates = Object.keys(history).sort();
-                    labels = sortedDates.map(d => d.slice(5)); // '2024-02-13' -> '02-13'
+                    labels = sortedDates.map(d => d.slice(5));
                     points = sortedDates.map(d => history[d].sentiment);
-                    
-                    // 오늘 데이터가 히스토리에 아직 안 쌓였을 경우 수동 추가
                     const todayStr = new Date().toISOString().split('T')[0];
                     if (!history[todayStr]) {
                         labels.push('Today');
                         points.push(item.sentiment);
                     }
-                    
                     chartInstance.data.labels = labels;
                     chartInstance.data.datasets[0].data = points;
                     chartInstance.update();
@@ -453,63 +423,97 @@
                         fill: true
                     }]
                 },
-                options: { 
-                    responsive: true, 
-                    maintainAspectRatio: false, 
-                    plugins: { legend: { display: false } }, 
-                    scales: { 
-                        y: { display: false, min: 0, max: 100 },
-                        x: { grid: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } }
-                    } 
-                }
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { display: false, min: 0, max: 100 }, x: { grid: { display: false }, ticks: { font: { size: 10 }, maxTicksLimit: 5 } } } }
             });
-        };
-
-        window.switchMainView = function(view) {
-            currentView = view;
-            const navIds = ['market', 'briefing', 'calendar'];
-            navIds.forEach(id => {
-                const btn = document.getElementById(`nav-${id}`);
-                btn.className = `flex-1 flex flex-col items-center justify-center py-3 transition-colors duration-200 ${id === view ? 'text-blue-600' : 'text-gray-400'}`;
-            });
-            document.getElementById('category-tabs-container').classList.toggle('hidden', view !== 'market');
-            if (view === 'market') renderMarketList(); else if (view === 'briefing') renderBriefing(); else if (view === 'calendar') renderCalendar();
-        };
-
-        window.switchMarketTab = function(tab, index) {
-            currentMarketTab = tab; currentMarketTabIndex = index;
-            document.getElementById('tab-indicator').style.transform = `translateX(${index * 100}%)`;
-            marketTabs.forEach((t, i) => document.getElementById(`tab-${t}`).className = `relative z-10 flex-1 py-2.5 text-[13px] font-bold ${i === index ? 'text-gray-900' : 'text-gray-500'} transition-colors flex items-center justify-center gap-1.5`);
-            renderMarketList();
         };
 
         window.closeDetail = () => document.getElementById('detail-page').classList.add('translate-x-full');
         window.showToast = (msg) => { const toast = document.getElementById('toast'); document.getElementById('toast-msg').textContent = msg; toast.classList.replace('opacity-0', 'opacity-100'); setTimeout(() => toast.classList.replace('opacity-100', 'opacity-0'), 2000); };
 
-        function initFirebase() {
-            app = initializeApp(firebaseConfig);
-            auth = getAuth(app); db = getFirestore(app);
-            signInAnonymously(auth);
-            onAuthStateChanged(auth, (user) => { if (user) { currentUser = user; listenToDatabase(); } });
+        function renderMarketList() {
+            const container = document.getElementById('content-container');
+            container.style.opacity = '0';
+            setTimeout(() => {
+                container.innerHTML = '';
+                if(!appData || !appData[currentMarketTab]) {
+                    container.innerHTML = `<div class="py-20 text-center text-gray-400 font-bold animate-fade-up">데이터가 없습니다.</div>`;
+                } else {
+                    appData[currentMarketTab].forEach((item, index) => {
+                        let sentimentColor = item.sentiment >= 60 ? 'text-rose-500' : (item.sentiment <= 40 ? 'text-blue-500' : 'text-gray-500');
+                        let sentimentBg = item.sentiment >= 60 ? 'bg-rose-50' : (item.sentiment <= 40 ? 'bg-blue-50' : 'bg-gray-100');
+                        const card = document.createElement('div');
+                        card.onclick = () => window.openDetail(index);
+                        card.className = "bg-white rounded-[24px] shadow-sm border border-gray-100/80 cursor-pointer transition-all active:scale-95 animate-fade-up p-4 sm:p-5 flex items-center justify-between group mb-3";
+                        card.style.animationDelay = `${(index % 10) * 40}ms`;
+                        card.innerHTML = `
+                            <div class="flex items-center gap-4">
+                                <div class="w-11 h-11 rounded-[16px] flex items-center justify-center font-black text-[17px] ${sentimentBg} ${sentimentColor}">${item.rank}</div>
+                                <div>
+                                    <h3 class="font-bold text-gray-900 text-[16px] tracking-tight leading-tight">${item.name}</h3>
+                                    <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">${item.code}</span>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <div class="font-black text-[18px] ${sentimentColor}">${item.sentiment}<span class="text-[10px] text-gray-300 ml-0.5">/100</span></div>
+                                <i class="ph-bold ph-caret-right text-gray-300 group-hover:text-blue-500 transition-colors"></i>
+                            </div>`;
+                        container.appendChild(card);
+                    });
+                }
+                container.style.opacity = '1';
+            }, 100);
         }
 
-        function listenToDatabase() {
-            onSnapshot(doc(db, 'artifacts', APP_ID, 'public', 'data', 'stockpulse', 'latest'), (snap) => {
-                loadingOverlay.classList.add('hidden');
-                if (snap.exists()) { 
-                    appData = snap.data().payload; 
-                    const dateObj = new Date(snap.data().updatedAt);
-                    document.getElementById('last-update-time').textContent = `UPDATED · ${dateObj.getHours()}:${dateObj.getMinutes().toString().padStart(2, '0')}`;
-                    if(currentView === 'market') renderMarketList(); 
-                }
+        function renderBriefing() {
+            const container = document.getElementById('content-container');
+            container.innerHTML = '';
+            if(!macroData) { container.innerHTML = `<div class="py-20 text-center text-gray-400 font-bold animate-fade-up">브리핑 데이터를 수집 중입니다.</div>`; return; }
+
+            let timeLabel = "";
+            if (macroUpdatedAt) {
+                const d = new Date(macroUpdatedAt);
+                timeLabel = new Intl.DateTimeFormat('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
+            }
+
+            let globalSummaryHtml = macroData.global_summary ? `<div class="mb-8 mt-2"><h2 class="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-4 px-1 flex items-center gap-1.5"><i class="ph-fill ph-trend-up text-blue-600"></i> Market Overview</h2><div class="bg-white p-6 rounded-[28px] shadow-sm border border-gray-100 animate-fade-up relative overflow-hidden group"><div class="absolute top-0 right-0 w-24 h-24 bg-blue-50/50 rounded-bl-[40px] -mr-6 -mt-6 transition-transform group-hover:scale-110 duration-700"></div><div class="relative z-10"><div class="flex items-center justify-between mb-3"><span class="text-[10px] font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg uppercase tracking-wide">Global Summary</span><span class="text-[10px] font-bold text-gray-400 flex items-center gap-1 bg-gray-50 px-2 py-0.5 rounded-lg"><i class="ph-bold ph-clock"></i> ${timeLabel}</span></div><p class="text-[16px] font-bold text-gray-800 leading-relaxed tracking-tight">"${macroData.global_summary}"</p></div></div></div>` : '';
+
+            let briefingHtml = (macroData.briefing || []).map(b => `<div class="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100 mb-3 animate-fade-up"><div class="flex items-center justify-between mb-3 border-b border-gray-50 pb-2"><div class="flex items-center gap-2"><span class="text-xl">${b.flag || '🌐'}</span><span class="text-[13px] font-black text-gray-900 uppercase tracking-wide">${b.country || 'Unknown'} Market Check</span></div></div><p class="text-[14px] text-gray-600 font-medium leading-relaxed">${b.summary}</p></div>`).join('');
+
+            let calendarResultsHtml = (macroData.calendar_results || []).map(evt => {
+                let impactColor = evt.impact_color === 'red' ? 'text-rose-600 bg-rose-50' : (evt.impact_color === 'green' ? 'text-green-600 bg-green-50' : 'text-gray-600 bg-gray-100');
+                let dateDisplay = evt.date ? evt.date.substring(5).replace('-', '.') : '';
+                return `<div class="flex flex-col gap-2 py-4 border-b border-gray-100 last:border-0 animate-fade-up"><div class="flex justify-between items-start"><div class="flex items-center gap-2"><span class="text-[11px] font-bold text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">${dateDisplay} ${evt.time}</span><span class="text-[14px] font-bold text-gray-900 leading-snug">${evt.event}</span></div></div><div class="flex items-center gap-4 pl-1"><div class="flex flex-col"><span class="text-[10px] text-gray-400 font-bold uppercase">Actual</span><span class="text-[13px] font-black ${impactColor.split(' ')[0]}">${evt.actual}</span></div><div class="w-[1px] h-6 bg-gray-100"></div><div class="flex flex-col"><span class="text-[10px] text-gray-400 font-bold uppercase">Forecast</span><span class="text-[13px] font-bold text-gray-600">${evt.forecast}</span></div><div class="flex flex-col"><span class="text-[10px] text-gray-400 font-bold uppercase">Previous</span><span class="text-[13px] font-bold text-gray-400">${evt.previous || "-"}</span></div></div><div class="mt-1 bg-gray-50/80 p-3 rounded-xl"><p class="text-[12px] font-bold text-gray-700 flex items-start gap-1.5 leading-snug"><i class="ph-fill ph-lightbulb text-amber-400 text-sm mt-0.5"></i>${evt.impact}</p></div></div>`;
+            }).join('');
+
+            container.innerHTML = `${globalSummaryHtml}<div class="mb-8"><h2 class="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-4 px-1 flex items-center gap-1.5"><i class="ph-fill ph-globe text-blue-500"></i> Global Morning Brief</h2>${briefingHtml}</div><div><h2 class="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-4 px-1 flex items-center gap-1.5"><i class="ph-fill ph-check-circle text-rose-500"></i> Recent Key Results</h2><div class="bg-white rounded-[24px] shadow-sm border border-gray-100 px-5 py-2">${calendarResultsHtml || '<p class="text-xs text-gray-400 py-6 text-center italic font-bold">최근 발표된 주요 지표 없음</p>'}</div></div>`;
+            container.style.opacity = '1';
+        }
+
+        function renderCalendar() {
+            const container = document.getElementById('content-container');
+            container.innerHTML = '';
+            if (!macroData || !macroData.upcoming_events || macroData.upcoming_events.length === 0) {
+                container.innerHTML = `<div class="py-20 text-center text-gray-400 font-bold animate-fade-up">예정된 일정이 없습니다.</div>`;
+                return;
+            }
+            const eventsByDate = macroData.upcoming_events.reduce((acc, evt) => { if (!acc[evt.date]) acc[evt.date] = []; acc[evt.date].push(evt); return acc; }, {});
+            const sortedDates = Object.keys(eventsByDate).sort();
+            let html = '<div class="space-y-6">';
+            sortedDates.forEach(dateStr => {
+                const dateObj = new Date(dateStr);
+                const dayName = new Intl.DateTimeFormat('ko-KR', { weekday: 'short' }).format(dateObj);
+                const displayDate = `${dateObj.getMonth() + 1}. ${dateObj.getDate()} (${dayName})`;
+                const isToday = dateStr === new Date().toISOString().split('T')[0];
+                html += `<div class="animate-fade-up"><div class="flex items-center gap-2 mb-3 px-1"><h3 class="text-lg font-black text-gray-900 ${isToday ? 'text-blue-600' : ''}">${displayDate}</h3>${isToday ? '<span class="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-bold">TODAY</span>' : ''}</div><div class="bg-white rounded-[24px] shadow-sm border border-gray-100 overflow-hidden">`;
+                eventsByDate[dateStr].forEach((evt, idx) => {
+                    const borderClass = idx !== eventsByDate[dateStr].length - 1 ? 'border-b border-gray-50' : '';
+                    html += `<div class="p-4 flex gap-4 items-start ${borderClass}"><div class="flex flex-col items-center min-w-[44px] pt-0.5"><span class="text-[11px] font-bold text-gray-500 bg-gray-50 px-2 py-1 rounded-lg">${evt.time}</span></div><div class="flex-1"><span class="text-[14px] font-bold text-gray-800 leading-snug">${evt.event}</span></div></div>`;
+                });
+                html += `</div></div>`;
             });
-            onSnapshot(doc(db, 'artifacts', APP_ID, 'public', 'data', 'macro', 'latest'), (snap) => {
-                if (snap.exists()) { 
-                    macroData = snap.data().payload; 
-                    macroUpdatedAt = snap.data().updatedAt; 
-                    if(currentView === 'briefing') renderBriefing(); 
-                }
-            });
+            html += '</div>';
+            container.innerHTML = html;
+            container.style.opacity = '1';
         }
 
         document.addEventListener('DOMContentLoaded', () => { initFirebase(); initNativeBridge(); });
